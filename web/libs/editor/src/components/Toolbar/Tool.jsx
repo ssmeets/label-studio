@@ -116,61 +116,64 @@ export const Tool = ({
   const isDisabled = disabled || isAnnotationDrawing;
 
   return (
-    <Block
-      name="tool"
-      tag="button"
-      aria-label={ariaLabel}
-      mod={{
-        active,
-        disabled: isDisabled,
-        alignment,
-        expanded: expanded && !dynamic,
-        smart: dynamic || smart,
-      }}
-      onClick={(e) => {
-        if (!disabled && !isAnnotationDrawing) {
-          e.preventDefault();
-          if (tool?.unselectRegionOnToolChange) {
-            tool?.annotation?.unselectAreas?.();
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+      <Block
+        name="tool"
+        tag="button"
+        aria-label={ariaLabel}
+        mod={{
+          active,
+          disabled: isDisabled,
+          alignment,
+          expanded: expanded && !dynamic,
+          smart: dynamic || smart,
+        }}
+        onClick={(e) => {
+          if (!disabled && !isAnnotationDrawing) {
+            e.preventDefault();
+            if (tool?.unselectRegionOnToolChange) {
+              tool?.annotation?.unselectAreas?.();
+            }
+            onClick?.(e);
           }
-          onClick?.(e);
-        }
-      }}
-      onMouseEnter={() => {
-        setHovered(true);
-      }}
-      onMouseLeave={() => {
-        setHovered(false);
-      }}
-    >
-      <Elem name="icon">{icon}</Elem>
-      {dynamic === false &&
-        controlsOnHover === false &&
-        (expanded ? (
-          <>
+        }}
+        onMouseEnter={() => {
+          setHovered(true);
+        }}
+        onMouseLeave={() => {
+          setHovered(false);
+        }}
+      >
+        <Elem name="icon">{icon}</Elem>
+        {dynamic === false &&
+          controlsOnHover === false &&
+          (expanded ? (
             <Elem name="label">
               {extraContent}
               {label}
               {shortcutView}
             </Elem>
-          </>
-        ) : (
-          (isDefined(label) || isDefined(shortcutView)) &&
-          !showControls && (
-            <Elem name="tooltip" mod={{ controlled: !!(smart && extra) }}>
-              <Elem name="tooltip-body">
-                {extraContent}
-                {label}
-                {shortcutView}
+          ) : (
+            (isDefined(label) || isDefined(shortcutView)) &&
+            !showControls && (
+              <Elem name="tooltip" mod={{ controlled: !!(smart && extra) }}>
+                <Elem name="tooltip-body">
+                  {extraContent}
+                  {label}
+                  {shortcutView}
+                </Elem>
               </Elem>
-            </Elem>
-          )
-        ))}
+            )
+          ))}
+      </Block>
+
       {showControls && (
-        <Elem name="controls" onClickCapture={(e) => e.stopPropagation()}>
-          <Elem name="controls-body">{controls}</Elem>
+        <Elem name="controls">
+          <Elem name="controls-body">
+            {controls}
+          </Elem>
         </Elem>
       )}
-    </Block>
+    </div>
   );
 };

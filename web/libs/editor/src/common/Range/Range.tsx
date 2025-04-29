@@ -104,6 +104,7 @@ export const Range: FC<RangeProps> = ({
   }, [step, multi, currentValue]);
 
   const onClick = useCallback(
+    console.log("onClick"),
     (e: RMouseEvent<HTMLElement>) => {
       const target = e.currentTarget as HTMLElement;
       const rect = target.getBoundingClientRect();
