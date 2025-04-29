@@ -1,5 +1,5 @@
-// Fix for Brush Tool with Flood Fill functionality
-// The key issue is in the commitDrawingRegion method and how regions maintain their labels
+// Brush Tool with Apple Pencil Support
+// This enhancement adds proper handling for Apple Pencil events on iPad
 
 import { observer } from "mobx-react";
 import { types } from "mobx-state-tree";
@@ -27,6 +27,75 @@ const IconDot = ({ size }) => {
         borderRadius: "100%",
       }}
     />
+  );
+};
+
+// Fill bucket icon component
+const FillBucketIcon = ({ size = 24, color = "currentColor", active = false }) => {
+  return (
+    <svg
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      fill={active ? "dodgerblue" : "gray"}
+      xmlns="http://www.w3.org/2000/svg"
+      style={{ transition: 'fill 0.3s' }}
+    >
+      <path
+        d="M3 17.25V21h3.75l10.61-10.61-3.75-3.75L3 17.25z"
+        stroke="black"
+        strokeWidth="1"
+        fill={active ? "white" : "lightgray"}
+      />
+      <path
+        d="M18 17c0 1.66-1 3-2 3s-2-1.34-2-3c0-1.66 2-4 2-4s2 2.34 2 4z"
+        fill={active ? "blue" : "gray"}
+      />
+    </svg>
+  );
+};
+
+// Flood fill toggle button component
+const FloodFillToggleButton = ({ isEnabled, onToggle }) => {
+  return (
+    <div 
+      style={{ 
+        margin: '12px 0',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center'
+      }}
+    >
+      <button
+        onClick={onToggle}
+        title={`${isEnabled ? 'Disable' : 'Enable'} flood fill (F)`}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '8px',
+          borderRadius: '4px',
+          border: 'none',
+          backgroundColor: isEnabled ? 'rgba(32, 128, 208, 0.1)' : '#f5f5f5',
+          cursor: 'pointer',
+          width: '40px',
+          height: '40px',
+          transition: 'all 0.2s ease',
+          boxShadow: isEnabled ? '0 0 0 2px rgba(32, 128, 208, 0.3)' : 'none'
+        }}
+      >
+        <FillBucketIcon active={isEnabled} />
+      </button>
+      
+      <div style={{ 
+        fontSize: '10px', 
+        marginTop: '4px', 
+        opacity: 0.7,
+        textAlign: 'center'
+      }}>
+        Flood Fill {isEnabled ? "(ON)" : ""}
+      </div>
+    </div>
   );
 };
 
@@ -60,15 +129,18 @@ const _Tool = types
   })
   .volatile(() => ({
     canInteractWithRegions: false,
-    // Add this to store the current active label ID
     currentLabelId: null,
+    // Add flags for tracking pointer events
+    pointerIsDown: false,
+    lastPointerPosition: { x: 0, y: 0 },
+    isPencilDown: false,
   }))
   .views((self) => ({
     get viewClass() {
       return () => <ToolView item={self} />;
     },
     get iconComponent() {
-      return self.dynamic ? NodeViews.BrushRegionModel.altIcon : NodeViews.BrushRegionModel.icon;
+      return self.dynamic ? NodeViews.Rect3PointRegionModel.altIcon : NodeViews.Rect3PointRegionModel.icon;
     },
     get tagTypes() {
       return {
@@ -92,23 +164,11 @@ const _Tool = types
             self.setStroke(value);
           }}
         />,
-        <div 
-          key="flood-fill-status" 
-          style={{ 
-            margin: '12px 0', 
-            padding: '8px',
-            borderRadius: '4px',
-            backgroundColor: self.floodFillEnabled ? 'rgba(32, 128, 208, 0.1)' : '#f5f5f5',
-            textAlign: 'center',
-            fontSize: '12px',
-          }}
-          onClick={() => self.toggleFloodFill()}
-        >
-          <div>Flood Fill: {self.floodFillEnabled ? "ON" : "OFF"}</div>
-          <div style={{ fontSize: '10px', marginTop: '4px', opacity: 0.7 }}>
-            Press 'F' to toggle
-          </div>
-        </div>,
+        <FloodFillToggleButton
+          key="flood-fill-toggle"
+          isEnabled={self.floodFillEnabled}
+          onToggle={() => self.toggleFloodFill()}
+        />,
       ];
     },
     get extraShortcuts() {
@@ -137,6 +197,8 @@ const _Tool = types
   .actions((self) => {
     let brush;
     let isFirstBrushStroke;
+    // Keep a reference to the event listeners so we can remove them later
+    let pointerEventListeners = null;
 
     return {
       // Flood fill toggle and cursor update
@@ -152,7 +214,7 @@ const _Tool = types
         
         if (self.floodFillEnabled) {
           // Use a paint bucket cursor when flood fill is enabled
-          stage.container().style.cursor = "url('data:image/svg+xml;utf8,<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"32\" height=\"32\" viewBox=\"0 0 32 32\"><path fill=\"black\" d=\"M12 0L8 4H2v6l-2 4 4 10h10l6-2 4-8-4-8-8-6zm-2 6a2 2 0 1 1 0 4 2 2 0 0 1 0-4z\"/></svg>') 16 16, auto";
+          stage.container().style.cursor = "url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHdpZHRoPSczMicgaGVpZ2h0PSczMicgdmlld0JveD0nMCAwIDI0IDI0Jz48cGF0aCBmaWxsPSd3aGl0ZScgc3Ryb2tlPSdibGFjaycgc3Ryb2tlLXdpZHRoPScxJyBkPSdNMyAxNy4yNVYyMWgzLjc1bDEwLjYxLTEwLjYxLTMuNzUtMy43NUwzIDE3LjI1eicvPjxwYXRoIGZpbGw9J2JsdWUnIGQ9J00xOCAxN2MwIDEuNjYtMSAzLTIgM3MtMi0xLjM0LTItM2MwLTEuNjYgMi00IDItNHMyIDIgMiA0eicvPjxwYXRoIGZpbGw9J2JsdWUnIGQ9J00yMC43MSA3LjA0YTEuMDAzIDEuMDAzIDAgMCAwIDAtMS40MmwtMi4zNC0yLjM0YTEuMDAzIDEuMDAzIDAgMCAwLTEuNDIgMGwtMS44MyAxLjgzIDMuNzUgMy43NSAxLjg0LTEuODJ6Jy8+PC9zdmc+'), auto";
           // Fallback to crosshair if the SVG cursor doesn't work
           if (stage.container().style.cursor === "") {
             stage.container().style.cursor = "crosshair";
@@ -170,7 +232,7 @@ const _Tool = types
         self.currentLabelId = labelId;
       },
       
-      // Capture the current selected label when the tool is selected
+      // Store the current selected label when the tool is selected
       beforeUpdateSelected() {
         if (self.control && self.control.selectedLabels) {
           const selectedLabels = self.control.selectedLabels;
@@ -178,6 +240,151 @@ const _Tool = types
             self.currentLabelId = selectedLabels[0];
           }
         }
+      },
+      
+      // Apple Pencil specific setup
+      afterSelect() {
+        self.setupPointerEvents();
+      },
+      
+      afterDeselect() {
+        self.removePointerEvents();
+      },
+      
+      // Setup dedicated pointer event listeners for Apple Pencil
+      setupPointerEvents() {
+        if (!self.obj?.stageRef) return;
+        
+        const container = self.obj.stageRef.container();
+        
+        // Remove any existing listeners to prevent duplicates
+        self.removePointerEvents();
+        
+        // Store references to the bound event handlers so we can remove them later
+        const handlers = {
+          pointerdown: self.handlePointerDown.bind(self),
+          pointermove: self.handlePointerMove.bind(self),
+          pointerup: self.handlePointerUp.bind(self),
+          pointercancel: self.handlePointerUp.bind(self),
+          pointerleave: self.handlePointerUp.bind(self)
+        };
+        
+        // Add event listeners with passive: false to allow preventDefault
+        Object.entries(handlers).forEach(([event, handler]) => {
+          container.addEventListener(event, handler, { passive: false });
+        });
+        
+        // Store references to remove later
+        pointerEventListeners = handlers;
+        
+        console.log("Pointer event listeners set up for Apple Pencil support");
+      },
+      
+      // Remove event listeners when tool is deselected
+      removePointerEvents() {
+        if (!self.obj?.stageRef || !pointerEventListeners) return;
+        
+        const container = self.obj.stageRef.container();
+        
+        // Remove all registered event listeners
+        Object.entries(pointerEventListeners).forEach(([event, handler]) => {
+          container.removeEventListener(event, handler);
+        });
+        
+        pointerEventListeners = null;
+        console.log("Pointer event listeners removed");
+      },
+      
+      // Pointer event handlers for Apple Pencil
+      handlePointerDown(e) {
+        // Check if this is an Apple Pencil event (pointerType === 'pen')
+        const isPencil = e.pointerType === 'pen';
+        
+        // For debugging
+        console.log(`Pointer down: ${e.pointerType}, isPencil: ${isPencil}, pressure: ${e.pressure}`);
+        
+        // Store the current pointer state
+        self.pointerIsDown = true;
+        self.isPencilDown = isPencil;
+        
+        // Skip regular handling if not allowed
+        if (!self.isAllowedInteraction(e)) {
+          console.log("Interaction not allowed");
+          return;
+        }
+        
+        // Konva stage coordinates
+        const stage = self.obj.stageRef;
+        const point = stage.getPointerPosition();
+        
+        if (!point) {
+          console.log("No point position found");
+          return;
+        }
+        
+        // Store for move events
+        self.lastPointerPosition = { x: point.x, y: point.y };
+        
+        // Don't let event propagate to prevent conflicts
+        e.preventDefault();
+        e.stopPropagation();
+        
+        // Handle the drawing with our coordinates
+        self.startDrawing(point.x, point.y, e);
+      },
+      
+      handlePointerMove(e) {
+        // Only process if pointer is down
+        if (!self.pointerIsDown) return;
+        
+        // Only process Apple Pencil events if that's what started the drawing
+        if (self.isPencilDown && e.pointerType !== 'pen') return;
+        
+        // Skip if not in drawing mode
+        if (self.mode !== "drawing") return;
+        
+        // Skip for flood fill mode
+        if (self.floodFillEnabled) return;
+        
+        // Konva stage coordinates
+        const stage = self.obj.stageRef;
+        const point = stage.getPointerPosition();
+        
+        if (!point) return;
+        
+        // Don't let event propagate
+        e.preventDefault();
+        e.stopPropagation();
+        
+        // Add a point on the path
+        self.addPoint(point.x, point.y);
+        
+        // Store position
+        self.lastPointerPosition = { x: point.x, y: point.y };
+      },
+      
+      handlePointerUp(e) {
+        // Skip if not drawing or if it's a different pointer type than what started the drawing
+        if (self.mode !== "drawing" || (self.isPencilDown && e.pointerType !== 'pen')) {
+          self.pointerIsDown = false;
+          self.isPencilDown = false;
+          return;
+        }
+        
+        // Konva stage coordinates
+        const stage = self.obj.stageRef;
+        const point = stage.getPointerPosition() || self.lastPointerPosition;
+        
+        // Don't let event propagate
+        e.preventDefault();
+        e.stopPropagation();
+        
+        // Finish the drawing
+        self.finishDrawing(point.x, point.y);
+        
+        // Reset pointer states
+        self.pointerIsDown = false;
+        self.isPencilDown = false;
       },
       
       // Function to detect enclosed shapes - fixed to avoid MobX deletion issues
@@ -349,21 +556,13 @@ const _Tool = types
       },
 
       addPoint(x, y) {
-        brush.addPoint(Math.floor(x), Math.floor(y));
+        if (brush) {
+          brush.addPoint(Math.floor(x), Math.floor(y));
+        }
       },
       
-      // Mouse event handlers
-      mousedownEv(ev, _, [x, y]) {
-        console.log("mousedownEv", x, y);
-        if (!self.isAllowedInteraction(ev)) return;
-        if (
-          !findClosestParent(
-            ev.target,
-            (el) => el === self.obj.stageRef.content,
-            (el) => el.parentElement,
-          )
-        )
-          return;
+      // Centralized function to start drawing
+      startDrawing(x, y, originalEvent) {
         const c = self.control;
         const o = self.obj;
         
@@ -374,7 +573,7 @@ const _Tool = types
 
         brush = self.getSelectedShape;
 
-        // prevent drawing when current image is
+        // Prevent drawing when current image is
         // different from image where the brush was started
         if (o && brush && o.multiImage && o.currentImage !== brush.item_index) return;
 
@@ -576,33 +775,21 @@ const _Tool = types
           self.addPoint(x, y);
         }
       },
-
-      mousemoveEv(ev, _, [x, y]) {
-        if (!self.isAllowedInteraction(ev)) return;
-        if (self.mode !== "drawing") return;
-        // Skip for flood fill mode
-        if (self.floodFillEnabled) return;
-        if (
-          !findClosestParent(
-            ev.target,
-            (el) => el === self.obj.stageRef.content,
-            (el) => el.parentElement,
-          )
-        )
-          return;
       
-        self.addPoint(x, y);
-      },
-      
-      mouseupEv(_ev, _, [x, y]) {
+      // Centralized function to finish drawing
+      finishDrawing(x, y) {
         if (self.mode !== "drawing") return;
         // Skip for flood fill mode
         if (self.floodFillEnabled) return;
         
         self.addPoint(x, y);
         self.mode = "viewing";
-        brush.setDrawing(false);
-        brush.endPath();
+        
+        if (brush) {
+          brush.setDrawing(false);
+          brush.endPath();
+        }
+        
         if (isFirstBrushStroke) {
           setTimeout(() => {
             try {
@@ -624,6 +811,56 @@ const _Tool = types
           self.annotation.history.unfreeze();
           self.obj.annotation.setIsDrawing(false);
         }
+      },
+      
+      // Keep the original mouse event handlers for backward compatibility
+      // but delegate to our centralized functions
+      mousedownEv(ev, _, [x, y]) {
+        if (!self.isAllowedInteraction(ev)) return;
+        if (
+          !findClosestParent(
+            ev.target,
+            (el) => el === self.obj.stageRef.content,
+            (el) => el.parentElement,
+          )
+        )
+          return;
+          
+        // If Apple Pencil interaction is in progress, don't process mouse events
+        if (self.isPencilDown) return;
+        
+        self.startDrawing(x, y, ev);
+      },
+
+      mousemoveEv(ev, _, [x, y]) {
+        if (!self.isAllowedInteraction(ev)) return;
+        if (self.mode !== "drawing") return;
+        // Skip for flood fill mode
+        if (self.floodFillEnabled) return;
+        // If Apple Pencil interaction is in progress, don't process mouse events
+        if (self.isPencilDown) return;
+        
+        if (
+          !findClosestParent(
+            ev.target,
+            (el) => el === self.obj.stageRef.content,
+            (el) => el.parentElement,
+          )
+        )
+          return;
+      
+        self.addPoint(x, y);
+      },
+      
+      mouseupEv(ev, _, [x, y]) {
+        // If Apple Pencil interaction is in progress, don't process mouse events
+        if (self.isPencilDown) return;
+        
+        if (self.mode !== "drawing") return;
+        // Skip for flood fill mode
+        if (self.floodFillEnabled) return;
+        
+        self.finishDrawing(x, y);
       },
     };
   });
