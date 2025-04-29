@@ -16,6 +16,17 @@ import { NodeViews } from "../components/Node/Node";
 const MIN_SIZE = 1;
 const MAX_SIZE = 50;
 
+// Debug logging function that always works
+const DEBUG = false;
+function debugLog(...args) {
+  if (DEBUG) {
+    // Use both console.log and console.warn to ensure visibility
+    console.log(`[BRUSH-DEBUG]`, ...args);
+    // Also use console.warn which is often displayed even when logs are filtered
+    console.warn(`[BRUSH-DEBUG]`, ...args);
+  }
+}
+
 const IconDot = ({ size }) => {
   return (
     <span
@@ -130,11 +141,17 @@ const _Tool = types
   .volatile(() => ({
     canInteractWithRegions: false,
     currentLabelId: null,
-    // Add flags for tracking pointer events
+    // Pointer event tracking
     pointerIsDown: false,
     lastPointerPosition: { x: 0, y: 0 },
     isPencilDown: false,
-  }))
+    // Touch event tracking
+    activeSource: null,
+    touchId: null,
+    lastX: 0,
+    lastY: 0,
+    directTouchHandlers: null
+  })) 
   .views((self) => ({
     get viewClass() {
       return () => <ToolView item={self} />;
@@ -200,14 +217,77 @@ const _Tool = types
     // Keep a reference to the event listeners so we can remove them later
     let pointerEventListeners = null;
 
+    // Function to dump info about the event for debugging
+    function dumpEvent(prefix, ev) {
+      debugLog(`${prefix} EVENT:`, {
+        type: ev.type,
+        touches: ev.touches ? Array.from(ev.touches).map(t => ({ id: t.identifier, x: t.clientX, y: t.clientY })) : "no touches",
+        target: ev.target ? ev.target.tagName || "unknown" : "no target",
+        x: ev.clientX,
+        y: ev.clientY
+      });
+    }
+
     return {
       // Flood fill toggle and cursor update
       toggleFloodFill() {
         self.floodFillEnabled = !self.floodFillEnabled;
         self.updateCursor();
       },
+
+      setActiveSource(source) {
+        self.activeSource = source;
+      },
       
+      setTouchId(id) {
+        self.touchId = id;
+      },
+      
+      updateLastCoordinates(x, y) {
+        self.lastX = x;
+        self.lastY = y;
+      },      
+      getCanvasCoordinates(e, specificTouch) {
+        if (!self.obj?.stageRef) return null;
+        
+        const stage = self.obj.stageRef;
+        const container = stage.container();
+        const rect = container.getBoundingClientRect();
+        
+        let clientX, clientY;
+        
+        if (specificTouch) {
+          // Use specific touch if provided
+          clientX = specificTouch.clientX;
+          clientY = specificTouch.clientY;
+        } else if (e.touches && e.touches.length > 0) {
+          // Use first touch
+          clientX = e.touches[0].clientX;
+          clientY = e.touches[0].clientY;
+        } else if (e.changedTouches && e.changedTouches.length > 0) {
+          // Use first changed touch (for touchend)
+          clientX = e.changedTouches[0].clientX;
+          clientY = e.changedTouches[0].clientY;
+        } else if (e.clientX !== undefined) {
+          // Use mouse coordinates
+          clientX = e.clientX;
+          clientY = e.clientY;
+        } else {
+          return null;
+        }
+        
+        // Convert to canvas coordinates
+        const x = clientX - rect.left;
+        const y = clientY - rect.top;
+        
+        // Store last position for touchend/touchcancel
+        self.lastX = x;
+        self.lastY = y;
+        self.updateLastCoordinates(x, y);
+        return [x, y];
+      }, 
       updateCursor() {
+        self.addDirectTouchHandlers()
         if (!self.selected || !self.obj?.stageRef) return;
         const val = self.strokeWidth;
         const stage = self.obj.stageRef;
@@ -226,7 +306,10 @@ const _Tool = types
           stage.container().style.cursor = cursor.join("");
         }
       },
-      
+      updateLastCoordinates(x, y) {
+        self.lastX = x;
+        self.lastY = y;
+      },
       // Updated to store the current label ID
       onSelectLabel(labelId) {
         self.currentLabelId = labelId;
@@ -248,7 +331,19 @@ const _Tool = types
       },
       
       afterDeselect() {
+        debugLog("Tool deselected - cleaning up");
+        
+        // Remove pointer events
         self.removePointerEvents();
+        
+        // Remove direct touch handlers
+        self.removeDirectTouchHandlers();
+        
+        // Reset all state
+        self.setActiveSource(null);
+        self.setTouchId(null);
+        self.pointerIsDown = false;
+        self.isPencilDown = false;
       },
       
       // Setup dedicated pointer event listeners for Apple Pencil
@@ -526,7 +621,183 @@ const _Tool = types
           return null;
         }
       },
-
+      // Add direct touch event handlers at the window level
+      addDirectTouchHandlers() {
+        if (self.directTouchHandlers) return;
+        
+        debugLog("Adding direct touch handlers");
+        
+        // Create a function that will be called from handlers but uses actions
+        const handleTouchStart = (e) => {
+          if (!self.selected) return;
+  
+          // ADD THIS CODE RIGHT HERE ↓
+          // Check if the touch is within our canvas before preventing default
+          const container = self.obj?.stageRef?.container();
+          if (!container) return;
+          
+          // Only handle events that are within our drawing canvas
+          let isWithinCanvas = false;
+          if (e.target) {
+            // Check if the target is our canvas or within it
+            isWithinCanvas = e.target === container || 
+                             container.contains(e.target) ||
+                             // Also check for Konva's content node
+                             (self.obj?.stageRef?.content && 
+                              (e.target === self.obj.stageRef.content || 
+                               self.obj.stageRef.content.contains(e.target)));
+          }
+          
+          // Only process events within our canvas
+          if (!isWithinCanvas) {
+            debugLog("Touch outside canvas - ignoring");
+            return;
+          }
+          // ADD THIS CODE RIGHT HERE ↑
+          
+          dumpEvent("DIRECT TOUCH START", e);
+          e.preventDefault();
+          e.stopPropagation();
+          
+          // Skip if already drawing with a different input source
+          if (self.activeSource && self.activeSource !== 'touch') return;
+          
+          // Set touch as active input source and store touch ID using actions
+          self.setActiveSource('touch');
+          if (e.touches && e.touches.length > 0) {
+            self.setTouchId(e.touches[0].identifier);
+          }
+          
+          // Get coordinates relative to canvas
+          const coords = self.getCanvasCoordinates(e);
+          if (!coords) return;
+          
+          // Start drawing
+          self.startDrawing(coords[0], coords[1], e);
+        };
+        
+        const handleTouchMove = (e) => {
+          if (!self.selected) return;
+          if (self.activeSource !== 'touch' || self.mode !== "drawing") return;
+          if (self.floodFillEnabled) return;
+          
+          dumpEvent("DIRECT TOUCH MOVE", e);
+          e.preventDefault();
+          e.stopPropagation();
+          
+          // Verify it's the same touch we started with
+          if (e.touches) {
+            let found = false;
+            for (let i = 0; i < e.touches.length; i++) {
+              if (e.touches[i].identifier === self.touchId) {
+                found = true;
+                break;
+              }
+            }
+            if (!found) return;
+          }
+          
+          // Get coordinates relative to canvas
+          const coords = self.getCanvasCoordinates(e);
+          if (!coords) return;
+          
+          // Add point to drawing
+          self.addPoint(coords[0], coords[1]);
+        };
+        
+        const handleTouchEnd = (e) => {
+          if (!self.selected || self.activeSource !== 'touch') return;
+          
+          // Skip if not using touch
+          if (self.activeSource !== 'touch') return;
+          
+          dumpEvent("DIRECT TOUCH END", e);
+          if (self.mode === "drawing") {
+            e.preventDefault();
+            e.stopPropagation();
+          }
+          
+          
+          // Check if our touch has ended
+          let touchEnded = true;
+          if (e.touches) {
+            for (let i = 0; i < e.touches.length; i++) {
+              if (e.touches[i].identifier === self.touchId) {
+                touchEnded = false;
+                break;
+              }
+            }
+          }
+          
+          // If our touch ended and we were drawing, finish
+          if (touchEnded && self.mode === "drawing") {
+            // Get coordinates from changedTouches since the touch is no longer active
+            let coords;
+            if (e.changedTouches) {
+              for (let i = 0; i < e.changedTouches.length; i++) {
+                if (e.changedTouches[i].identifier === self.touchId) {
+                  coords = self.getCanvasCoordinates(e, e.changedTouches[i]);
+                  break;
+                }
+              }
+            }
+            
+            // If we couldn't find coordinates, use last known position
+            if (!coords) {
+              coords = [self.lastX || 0, self.lastY || 0];
+            }
+            
+            self.finishDrawing(coords[0], coords[1]);
+            self.setActiveSource(null);
+            self.setTouchId(null);
+          }
+        };
+        
+        const handleTouchCancel = (e) => {
+          if (!self.selected || self.activeSource !== 'touch') return;
+          
+          // Skip if not using touch
+          if (self.activeSource !== 'touch') return;
+          
+          dumpEvent("DIRECT TOUCH CANCEL", e);
+          if (self.mode === "drawing") {
+            e.preventDefault();
+            e.stopPropagation();
+          }
+          
+          // If we were drawing, finish
+          if (self.mode === "drawing") {
+            const coords = [self.lastX || 0, self.lastY || 0];
+            self.finishDrawing(coords[0], coords[1]);
+          }
+          
+          self.setActiveSource(null);
+          self.setTouchId(null);
+        };
+        
+        // Create event handler objects
+        const handlers = {
+          touchstart: handleTouchStart,
+          touchmove: handleTouchMove,
+          touchend: handleTouchEnd,
+          touchcancel: handleTouchCancel
+        };
+        
+        // Get the container element if available
+        const container = self.obj?.stageRef?.container() || document;
+        
+        // Add event listeners
+        container.addEventListener("touchstart", handlers.touchstart, { passive: false, capture: true });
+        window.addEventListener("touchmove", handlers.touchmove, { passive: false, capture: true });
+        window.addEventListener("touchend", handlers.touchend, { passive: false, capture: true });
+        window.addEventListener("touchcancel", handlers.touchcancel, { passive: false, capture: true });
+        
+        // Store handlers for removal later
+        self.directTouchHandlers = {
+          element: container,
+          handlers: handlers
+        };
+      },
       // Fix: Add proper label handling when applying states
       applyActiveStates(area) {
         try {
