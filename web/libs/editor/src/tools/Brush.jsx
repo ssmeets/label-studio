@@ -678,29 +678,7 @@ const _Tool = types
               }
               
               console.log(`Added ${pointsAdded} points inside the shape`);
-            } else {
-              console.log("Not inside an enclosed shape, using circle fill");
-              
-              // Fallback to simple circle fill if not inside a shape
-              const radius = Math.max(self.strokeWidth * 3, 20);
-              const numPoints = 24;
-              
-              for (let i = 0; i < numPoints; i++) {
-                const angle = (i / numPoints) * Math.PI * 2;
-                const px = x + Math.cos(angle) * radius;
-                const py = y + Math.sin(angle) * radius;
-                self.addPoint(px, py);
-              }
-              
-              // Add some points inside the circle
-              for (let i = 0; i < 20; i++) {
-                const r = radius * Math.random() * 0.8;
-                const angle = Math.random() * Math.PI * 2;
-                const px = x + Math.cos(angle) * r;
-                const py = y + Math.sin(angle) * r;
-                self.addPoint(px, py);
-              }
-            }
+            } 
             
             // End path and complete drawing
             brush.endPath();
