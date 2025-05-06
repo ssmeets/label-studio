@@ -833,197 +833,248 @@ const _Tool = types
       },
       
       // Centralized function to start drawing
-      startDrawing(x, y, originalEvent) {
-        const c = self.control;
-        const o = self.obj;
+// Improved flood fill algorithm that better handles self-intersecting polygons
+
+startDrawing(x, y, originalEvent) {
+  const c = self.control;
+  const o = self.obj;
+  
+  // Store the current label ID for later use
+  if (c.selectedLabels && c.selectedLabels.length > 0) {
+    self.currentLabelId = c.selectedLabels[0];
+  }
+
+  brush = self.getSelectedShape;
+
+  // Prevent drawing when current image is
+  // different from image where the brush was started
+  if (o && brush && o.multiImage && o.currentImage !== brush.item_index) return;
+
+  // Special handling for flood fill
+  if (self.floodFillEnabled) {
+    try {
+      console.log("Flood fill clicked at:", { x, y });
+      
+      // Check if the point is inside an enclosed shape
+      const result = self.isPointInEnclosedShape(x, y);
+      
+      // Initialize drawing
+      if (brush && brush.type === "brushregion") {
+        self.annotation.history.freeze();
+        self.mode = "drawing";
+        brush.setDrawing(true);
+        self.obj.annotation.setIsDrawing(true);
+        isFirstBrushStroke = false;
+      } else {
+        if (!self.canStartDrawing()) return;
+        if (self.tagTypes.stateTypes === self.control.type && !self.control.isSelected) return;
+        self.annotation.history.freeze();
+        self.mode = "drawing";
+        isFirstBrushStroke = true;
+        self.obj.annotation.setIsDrawing(true);
+        brush = self.createDrawingRegion({
+          touches: [],
+          coordstype: "px",
+        });
+      }
+      
+      // Begin path
+      brush.beginPath({
+        type: "add",
+        strokeWidth: self.strokeWidth || c.strokeWidth,
+      });
+      
+      if (result.inside) {
+        console.log("Filling enclosed shape");
         
-        // Store the current label ID for later use
-        if (c.selectedLabels && c.selectedLabels.length > 0) {
-          self.currentLabelId = c.selectedLabels[0];
+        const points = result.points;
+        
+        // Use a more sophisticated algorithm for self-intersecting polygons
+        const fillPoints = self.generateFloodFillPoints(points, x, y);
+        
+        for (const point of fillPoints) {
+          self.addPoint(point.x, point.y);
         }
-
-        brush = self.getSelectedShape;
-
-        // Prevent drawing when current image is
-        // different from image where the brush was started
-        if (o && brush && o.multiImage && o.currentImage !== brush.item_index) return;
-
-        // Special handling for flood fill
-        if (self.floodFillEnabled) {
-          try {
-            console.log("Flood fill clicked at:", { x, y });
-            
-            // Check if the point is inside an enclosed shape
-            const result = self.isPointInEnclosedShape(x, y);
-            
-            // Initialize drawing
-            if (brush && brush.type === "brushregion") {
-              self.annotation.history.freeze();
-              self.mode = "drawing";
-              brush.setDrawing(true);
-              self.obj.annotation.setIsDrawing(true);
-              isFirstBrushStroke = false;
-            } else {
-              if (!self.canStartDrawing()) return;
-              if (self.tagTypes.stateTypes === self.control.type && !self.control.isSelected) return;
-              self.annotation.history.freeze();
-              self.mode = "drawing";
-              isFirstBrushStroke = true;
-              self.obj.annotation.setIsDrawing(true);
-              brush = self.createDrawingRegion({
-                touches: [],
-                coordstype: "px",
-              });
+        
+        console.log(`Added ${fillPoints.length} points inside the shape`);
+      } 
+      
+      // End path and complete drawing
+      brush.endPath();
+      self.mode = "viewing";
+      brush.setDrawing(false);
+      
+      if (isFirstBrushStroke) {
+        // Let's make sure we don't try to access anything that might be deleted
+        try {
+          const newBrush = self.commitDrawingRegion();
+          if (newBrush) {
+            try {
+              self.obj.annotation.selectArea(newBrush);
+            } catch (err) {
+              console.error("Error selecting area:", err);
             }
-            
-            // Begin path
-            brush.beginPath({
-              type: "add",
-              strokeWidth: self.strokeWidth || c.strokeWidth,
-            });
-            
-            if (result.inside) {
-              console.log("Filling enclosed shape");
-              
-              const points = result.points;
-              
-              // Calculate bounding box of the shape (without modifying the array)
-              let minX = Infinity, minY = Infinity;
-              let maxX = -Infinity, maxY = -Infinity;
-              
-              for (let i = 0; i < points.length; i += 2) {
-                const px = points[i];
-                const py = points[i + 1];
-                minX = Math.min(minX, px);
-                minY = Math.min(minY, py);
-                maxX = Math.max(maxX, px);
-                maxY = Math.max(maxY, py);
-              }
-              
-              // Add padding
-              minX -= 5;
-              minY -= 5;
-              maxX += 5;
-              maxY += 5;
-              
-              console.log("Bounding box:", { minX, minY, maxX, maxY });
-              
-              // Create a grid of points inside the shape
-              const gridSize = Math.max(4, self.strokeWidth / 4);
-              let pointsAdded = 0;
-              const maxPoints = 5000; // Safety limit
-              
-              // Convert points to vertices format without modifying the array
-              const vertices = [];
-              for (let i = 0; i < points.length; i += 2) {
-                vertices.push({ 
-                  x: points[i], 
-                  y: points[i + 1] 
-                });
-              }
-              
-              // Fill with a grid pattern
-              for (let px = minX; px <= maxX && pointsAdded < maxPoints; px += gridSize) {
-                for (let py = minY; py <= maxY && pointsAdded < maxPoints; py += gridSize) {
-                  // Check if this point is inside the polygon
-                  let inside = false;
-                  for (let i = 0, j = vertices.length - 1; i < vertices.length; j = i++) {
-                    const xi = vertices[i].x;
-                    const yi = vertices[i].y;
-                    const xj = vertices[j].x;
-                    const yj = vertices[j].y;
-                    
-                    const intersect = ((yi > py) !== (yj > py)) && 
-                                      (px < (xj - xi) * (py - yi) / (yj - yi) + xi);
-                    
-                    if (intersect) {
-                      inside = !inside;
-                    }
-                  }
-                  
-                  if (inside) {
-                    self.addPoint(px, py);
-                    pointsAdded++;
-                  }
-                }
-              }
-              
-              console.log(`Added ${pointsAdded} points inside the shape`);
-            } 
-            
-            // End path and complete drawing
-            brush.endPath();
-            self.mode = "viewing";
-            brush.setDrawing(false);
-            
-            if (isFirstBrushStroke) {
-              // Let's make sure we don't try to access anything that might be deleted
-              try {
-                const newBrush = self.commitDrawingRegion();
-                if (newBrush) {
-                  try {
-                    self.obj.annotation.selectArea(newBrush);
-                  } catch (err) {
-                    console.error("Error selecting area:", err);
-                  }
-                }
-              } catch (err) {
-                console.error("Error committing region:", err);
-              }
-            } else {
-              // Make sure we commit changes even for existing regions
-              try {
-                self.commitDrawingRegion();
-              } catch (err) {
-                console.error("Error committing region:", err);
-              }
-            }
-            
-            self.annotation.history.unfreeze();
-            self.obj.annotation.setIsDrawing(false);
-          } catch (err) {
-            console.error("Flood fill error:", err);
-            console.error(err.stack);
-            self.mode = "viewing";
-            self.annotation.history.unfreeze();
-            self.obj.annotation.setIsDrawing(false);
           }
-          return;
+        } catch (err) {
+          console.error("Error committing region:", err);
         }
-        
-        // Original brush behavior when flood fill is not enabled
-        if (brush && brush.type === "brushregion") {
-          self.annotation.history.freeze();
-          self.mode = "drawing";
-          brush.setDrawing(true);
-          self.obj.annotation.setIsDrawing(true);
-          isFirstBrushStroke = false;
-          brush.beginPath({
-            type: "add",
-            strokeWidth: self.strokeWidth || c.strokeWidth,
-          });
-
-          self.addPoint(x, y);
-        } else {
-          if (!self.canStartDrawing()) return;
-          if (self.tagTypes.stateTypes === self.control.type && !self.control.isSelected) return;
-          self.annotation.history.freeze();
-          self.mode = "drawing";
-          isFirstBrushStroke = true;
-          self.obj.annotation.setIsDrawing(true);
-          brush = self.createDrawingRegion({
-            touches: [],
-            coordstype: "px",
-          });
-
-          brush.beginPath({
-            type: "add",
-            strokeWidth: self.strokeWidth || c.strokeWidth,
-          });
-
-          self.addPoint(x, y);
+      } else {
+        // Make sure we commit changes even for existing regions
+        try {
+          self.commitDrawingRegion();
+        } catch (err) {
+          console.error("Error committing region:", err);
         }
-      },
+      }
+      
+      self.annotation.history.unfreeze();
+      self.obj.annotation.setIsDrawing(false);
+    } catch (err) {
+      console.error("Flood fill error:", err);
+      console.error(err.stack);
+      self.mode = "viewing";
+      self.annotation.history.unfreeze();
+      self.obj.annotation.setIsDrawing(false);
+    }
+    return;
+  }
+  
+  // Original brush behavior when flood fill is not enabled
+  if (brush && brush.type === "brushregion") {
+    self.annotation.history.freeze();
+    self.mode = "drawing";
+    brush.setDrawing(true);
+    self.obj.annotation.setIsDrawing(true);
+    isFirstBrushStroke = false;
+    brush.beginPath({
+      type: "add",
+      strokeWidth: self.strokeWidth || c.strokeWidth,
+    });
+
+    self.addPoint(x, y);
+  } else {
+    if (!self.canStartDrawing()) return;
+    if (self.tagTypes.stateTypes === self.control.type && !self.control.isSelected) return;
+    self.annotation.history.freeze();
+    self.mode = "drawing";
+    isFirstBrushStroke = true;
+    self.obj.annotation.setIsDrawing(true);
+    brush = self.createDrawingRegion({
+      touches: [],
+      coordstype: "px",
+    });
+
+    brush.beginPath({
+      type: "add",
+      strokeWidth: self.strokeWidth || c.strokeWidth,
+    });
+
+    self.addPoint(x, y);
+  }
+},
+
+// Add this as a method to your Brush object
+generateFloodFillPoints(points, clickX, clickY) {
+  // Convert flat array to vertices
+  const vertices = [];
+  for (let i = 0; i < points.length; i += 2) {
+    vertices.push({ x: points[i], y: points[i + 1] });
+  }
+  
+  // Use a scanline flood fill algorithm with boundary following
+  const fillPoints = [];
+  const visited = new Set();
+  
+  // Start from the click point and use a queue-based flood fill
+  const queue = [{ x: Math.round(clickX), y: Math.round(clickY) }];
+  
+  // Calculate bounding box
+  let minX = Infinity, minY = Infinity;
+  let maxX = -Infinity, maxY = -Infinity;
+  
+  for (const vertex of vertices) {
+    minX = Math.min(minX, vertex.x);
+    minY = Math.min(minY, vertex.y);
+    maxX = Math.max(maxX, vertex.x);
+    maxY = Math.max(maxY, vertex.y);
+  }
+  
+  // Add some padding
+  minX -= 2;
+  minY -= 2;
+  maxX += 2;
+  maxY += 2;
+  
+  // Process queue with boundary following
+  while (queue.length > 0 && fillPoints.length < 5000) {
+    const current = queue.shift();
+    const key = `${current.x},${current.y}`;
+    
+    if (visited.has(key) || current.x < minX || current.x > maxX || 
+        current.y < minY || current.y > maxY) {
+      continue;
+    }
+    
+    // Check if point is inside using ray casting
+    if (self.isPointInsidePolygon(current.x, current.y, vertices)) {
+      visited.add(key);
+      fillPoints.push(current);
+      
+      // Add neighboring points to queue
+      const neighbors = [
+        { x: current.x + 1, y: current.y },
+        { x: current.x - 1, y: current.y },
+        { x: current.x, y: current.y + 1 },
+        { x: current.x, y: current.y - 1 }
+      ];
+      
+      for (const neighbor of neighbors) {
+        const neighborKey = `${neighbor.x},${neighbor.y}`;
+        if (!visited.has(neighborKey)) {
+          queue.push(neighbor);
+        }
+      }
+    }
+  }
+  
+  // If flood fill didn't work well, fall back to grid pattern
+  if (fillPoints.length < 10) {
+    fillPoints.length = 0; // Clear the array
+    
+    // Use a finer grid with better point density
+    const gridSize = Math.max(2, self.strokeWidth / 8);
+    
+    for (let px = minX; px <= maxX && fillPoints.length < 5000; px += gridSize) {
+      for (let py = minY; py <= maxY && fillPoints.length < 5000; py += gridSize) {
+        if (self.isPointInsidePolygon(px, py, vertices)) {
+          fillPoints.push({ x: px, y: py });
+        }
+      }
+    }
+  }
+  
+  return fillPoints;
+},
+
+// Add this as a method to your Brush object
+isPointInsidePolygon(x, y, vertices) {
+  let inside = false;
+  
+  // Ray casting algorithm
+  for (let i = 0, j = vertices.length - 1; i < vertices.length; j = i++) {
+    const xi = vertices[i].x;
+    const yi = vertices[i].y;
+    const xj = vertices[j].x;
+    const yj = vertices[j].y;
+    
+    if (((yi > y) !== (yj > y)) && 
+        (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) {
+      inside = !inside;
+    }
+  }
+  
+  return inside;
+},
       
       // Centralized function to finish drawing
       finishDrawing(x, y) {
