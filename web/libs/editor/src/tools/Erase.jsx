@@ -154,6 +154,23 @@ const _Tool = types
         if (!self.obj?.stageRef) return null;
         
         const stage = self.obj.stageRef;
+        
+        // Use the stage's getPointerPosition method which already handles transformations
+        // Instead of manually calculating coordinates, this gives us accurate stage coordinates
+        // even with zoom, pan, or other transformations applied
+        if (e.clientX !== undefined) {
+          // For mouse or pointer events, we can use getPointerPosition directly
+          const pos = stage.getPointerPosition();
+          if (pos) {
+            // Store last position for future reference
+            self.lastX = pos.x;
+            self.lastY = pos.y;
+            self.updateLastCoordinates(pos.x, pos.y);
+            return [pos.x, pos.y];
+          }
+        }
+        
+        // For touch events, we need to handle the specific touch point
         const container = stage.container();
         const rect = container.getBoundingClientRect();
         
@@ -171,23 +188,25 @@ const _Tool = types
           // Use first changed touch (for touchend)
           clientX = e.changedTouches[0].clientX;
           clientY = e.changedTouches[0].clientY;
-        } else if (e.clientX !== undefined) {
-          // Use mouse coordinates
-          clientX = e.clientX;
-          clientY = e.clientY;
         } else {
           return null;
         }
         
-        // Convert to canvas coordinates
-        const x = clientX - rect.left;
-        const y = clientY - rect.top;
+        // First convert to viewport-relative coordinates
+        const viewportX = clientX - rect.left;
+        const viewportY = clientY - rect.top;
+        
+        // Then transform the viewport coordinates to stage coordinates
+        // This accounts for any scaling, rotation, or translation
+        const transform = stage.getAbsoluteTransform().copy().invert();
+        const stagePoint = transform.point({ x: viewportX, y: viewportY });
         
         // Store last position for touchend/touchcancel
-        self.lastX = x;
-        self.lastY = y;
-        self.updateLastCoordinates(x, y);
-        return [x, y];
+        self.lastX = stagePoint.x;
+        self.lastY = stagePoint.y;
+        self.updateLastCoordinates(stagePoint.x, stagePoint.y);
+        
+        return [stagePoint.x, stagePoint.y];
       },
 
       updateCursor() {
@@ -284,24 +303,23 @@ const _Tool = types
           return;
         }
         
-        // Konva stage coordinates
-        const stage = self.obj.stageRef;
-        const point = stage.getPointerPosition();
+        // Get coordinates that properly account for stage transformations
+        const coords = self.getCanvasCoordinates(e);
         
-        if (!point) {
+        if (!coords) {
           console.log("No point position found");
           return;
         }
         
         // Store for move events
-        self.lastPointerPosition = { x: point.x, y: point.y };
+        self.lastPointerPosition = { x: coords[0], y: coords[1] };
         
         // Don't let event propagate to prevent conflicts
         e.preventDefault();
         e.stopPropagation();
         
         // Handle the drawing with our coordinates
-        self.startErasing(point.x, point.y, e);
+        self.startErasing(coords[0], coords[1], e);
       },
       
       handlePointerMove(e) {
@@ -314,21 +332,20 @@ const _Tool = types
         // Skip if not in drawing mode
         if (self.mode !== "drawing") return;
         
-        // Konva stage coordinates
-        const stage = self.obj.stageRef;
-        const point = stage.getPointerPosition();
+        // Get coordinates that properly account for stage transformations
+        const coords = self.getCanvasCoordinates(e);
         
-        if (!point) return;
+        if (!coords) return;
         
         // Don't let event propagate
         e.preventDefault();
         e.stopPropagation();
         
         // Add a point on the path
-        self.addPoint(point.x, point.y);
+        self.addPoint(coords[0], coords[1]);
         
         // Store position
-        self.lastPointerPosition = { x: point.x, y: point.y };
+        self.lastPointerPosition = { x: coords[0], y: coords[1] };
       },
       
       handlePointerUp(e) {
@@ -339,16 +356,19 @@ const _Tool = types
           return;
         }
         
-        // Konva stage coordinates
-        const stage = self.obj.stageRef;
-        const point = stage.getPointerPosition() || self.lastPointerPosition;
+        // Get coordinates that properly account for stage transformations
+        const coords = self.getCanvasCoordinates(e);
+        
+        // Use last position if coordinates couldn't be determined
+        const x = coords ? coords[0] : self.lastPointerPosition.x;
+        const y = coords ? coords[1] : self.lastPointerPosition.y;
         
         // Don't let event propagate
         e.preventDefault();
         e.stopPropagation();
         
         // Finish the drawing
-        self.finishErasing(point.x, point.y);
+        self.finishErasing(x, y);
         
         // Reset pointer states
         self.pointerIsDown = false;
